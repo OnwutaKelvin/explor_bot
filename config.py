@@ -3,8 +3,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _csv_ints(value: str | None) -> list[int]:
+    if not value:
+        return []
+    return [int(item.strip()) for item in value.split(",") if item.strip()]
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPERGROUP_ID = int(os.getenv("SUPERGROUP_ID"))
+ADMIN_IDS = _csv_ints(os.getenv("ADMIN_IDS")) or [1105956780]
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+TELEGRAM_CONNECT_TIMEOUT = float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", "30"))
+TELEGRAM_READ_TIMEOUT = float(os.getenv("TELEGRAM_READ_TIMEOUT", "60"))
+TELEGRAM_WRITE_TIMEOUT = float(os.getenv("TELEGRAM_WRITE_TIMEOUT", "60"))
+TELEGRAM_POOL_TIMEOUT = float(os.getenv("TELEGRAM_POOL_TIMEOUT", "30"))
 
 THREADS = {
     "welcome":       int(os.getenv("WELCOME_THREAD_ID")),

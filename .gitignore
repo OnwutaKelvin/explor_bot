@@ -9,6 +9,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Runtime logs
+logs/
+*.log
+
 # OS files
 .DS_Store
 Thumbs.db

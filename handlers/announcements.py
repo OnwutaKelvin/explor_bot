@@ -1,8 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
-from config import SUPERGROUP_ID, THREADS
+from config import ADMIN_IDS, SUPERGROUP_ID, THREADS
 
-ADMIN_IDS = [1105956780]  # 🔒 Replace with your Telegram user ID
 
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

@@ -1,7 +1,10 @@
 from telegram import Update
 from telegram.ext import ContextTypes
+import logging
 from config import SUPERGROUP_ID, THREADS
 from utils.storage import is_onboarded, get_state
+
+logger = logging.getLogger(__name__)
 
 # ── Strike tracker ─────────────────────────────────────────────────
 # Tracks how many times a user has tried to post in Networking
@@ -9,6 +12,9 @@ from utils.storage import is_onboarded, get_state
 networking_strikes = {}
 
 MAX_STRIKES = 3
+
+def get_networking_strikes_snapshot() -> dict[int, int]:
+    return dict(networking_strikes)
 
 
 async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -43,14 +49,26 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await message.delete()
             except Exception as e:
-                print(f"⚠️ Could not delete networking message: {e}")
+                logger.warning(
+                    "Could not delete networking message user_id=%s message_id=%s: %s",
+                    user.id,
+                    message.message_id,
+                    e,
+                )
 
             # Add a strike
             networking_strikes[user.id] = networking_strikes.get(user.id, 0) + 1
             strikes = networking_strikes[user.id]
             remaining = MAX_STRIKES - strikes
 
-            print(f"⚠️ {user.first_name} (ID: {user.id}) — Strike {strikes}/{MAX_STRIKES} in Networking")
+            logger.warning(
+                "Networking strike user_id=%s first_name=%s strikes=%s/%s remaining=%s",
+                user.id,
+                user.first_name,
+                strikes,
+                MAX_STRIKES,
+                remaining,
+            )
 
             # ── Strike 1: First warning ────────────────────────────
             if strikes == 1:
@@ -72,7 +90,7 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    print(f"⚠️ Could not send strike 1 warning: {e}")
+                    logger.warning("Could not send strike 1 warning user_id=%s: %s", user.id, e)
 
             # ── Strike 2: Final warning ────────────────────────────
             elif strikes == 2:
@@ -89,7 +107,7 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    print(f"⚠️ Could not send strike 2 warning: {e}")
+                    logger.warning("Could not send strike 2 warning user_id=%s: %s", user.id, e)
 
             # ── Strike 3: Eject the user ───────────────────────────
             elif strikes >= MAX_STRIKES:
@@ -103,9 +121,13 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=SUPERGROUP_ID,
                         user_id=user.id
                     )
-                    print(f"🚫 {user.first_name} (ID: {user.id}) ejected from EXPLOR")
+                    logger.warning(
+                        "User ejected from EXPLOR user_id=%s first_name=%s",
+                        user.id,
+                        user.first_name,
+                    )
                 except Exception as e:
-                    print(f"❌ Could not eject user {user.id}: {e}")
+                    logger.error("Could not eject user_id=%s: %s", user.id, e)
 
                 # Reset their strike count
                 networking_strikes.pop(user.id, None)
@@ -124,7 +146,7 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    print(f"⚠️ Could not post ejection notice: {e}")
+                    logger.warning("Could not post ejection notice user_id=%s: %s", user.id, e)
 
         return  # Stop here for Networking topic
 
@@ -140,8 +162,18 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_onboarded(user.id):
         try:
             await message.delete()
-        except Exception:
-            pass
+            logger.info(
+                "Deleted restricted message from unregistered user_id=%s thread_id=%s",
+                user.id,
+                thread_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Could not delete restricted message user_id=%s thread_id=%s: %s",
+                user.id,
+                thread_id,
+                e,
+            )
         try:
             state = get_state(user.id)
             if state in ("new", "pending", "filling_details"):
@@ -156,8 +188,19 @@ async def guard_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     parse_mode="Markdown"
                 )
-        except Exception:
-            pass
+                logger.info(
+                    "Sent onboarding reminder user_id=%s state=%s thread_id=%s",
+                    user.id,
+                    state,
+                    thread_id,
+                )
+        except Exception as e:
+            logger.warning(
+                "Could not send onboarding reminder user_id=%s thread_id=%s: %s",
+                user.id,
+                thread_id,
+                e,
+            )
 
 
 async def guard_networking(update: Update, context: ContextTypes.DEFAULT_TYPE):

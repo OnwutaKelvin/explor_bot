@@ -3,8 +3,11 @@ from telegram.ext import (
     ContextTypes, ConversationHandler,
     CallbackQueryHandler, MessageHandler, filters
 )
+import logging
 from config import SUPERGROUP_ID, THREADS
 from utils.storage import set_state, clear_temp_details
+
+logger = logging.getLogger(__name__)
 
 # Conversation states
 ASK_NAME, ASK_TWITTER, ASK_TELEGRAM, ASK_INTERESTS = range(4)
@@ -27,7 +30,7 @@ async def wipe_welcome_messages(context: ContextTypes.DEFAULT_TYPE, extra_ids: l
                 message_id=msg_id
             )
         except Exception as e:
-            print(f"⚠️ Could not delete message {msg_id}: {e}")
+            logger.warning("Could not delete onboarding message message_id=%s: %s", msg_id, e)
 
 
 # ── Step 1: New member joins ───────────────────────────────────────
@@ -41,6 +44,7 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_id = member.id
         set_state(user_id, "pending")
+        logger.info("New member pending onboarding user_id=%s first_name=%s", user_id, member.first_name)
 
         await context.bot.restrict_chat_member(
             chat_id=SUPERGROUP_ID,
@@ -68,7 +72,7 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # ✅ Track the photo message so it gets wiped after onboarding
             track_message(context, sent_photo.message_id)
         except Exception as e:
-            print(f"⚠️ Could not send welcome image: {e}")
+            logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
 
         # ✅ Step B: Send the welcome text + Continue button
         sent = await context.bot.send_message(
@@ -111,6 +115,7 @@ async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if str(user_id) not in query.data:
         await query.answer("⛔ This button is not for you.", show_alert=True)
+        logger.warning("Rejected rules callback for wrong user user_id=%s data=%s", user_id, query.data)
         return
 
     # 4: Track the welcome message and the button click message
@@ -158,6 +163,7 @@ async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     track_message(context, sent.message_id)
+    logger.info("Rules shown user_id=%s", user_id)
 
 
 # ── Step 3: Start Form ─────────────────────────────────────────────
@@ -168,9 +174,11 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if str(user_id) not in query.data:
         await query.answer("⛔ This button is not for you.", show_alert=True)
+        logger.warning("Rejected form callback for wrong user user_id=%s data=%s", user_id, query.data)
         return
 
     set_state(user_id, "filling_details")
+    logger.info("Onboarding form started user_id=%s", user_id)
 
     # 6: Only clear form fields — preserve onboarding_messages list
     context.user_data["name"] = ""
@@ -202,7 +210,7 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Step 4: Save Name → Ask Twitter ───────────────────────────────
 async def ask_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
-    print(f"📝 Name saved: {context.user_data['name']}")
+    logger.info("Onboarding step completed user_id=%s step=name", update.effective_user.id)
 
     # 8: Track user's answer message
     track_message(context, update.message.message_id)
@@ -228,7 +236,7 @@ async def ask_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Step 5: Save Twitter → Ask Telegram ───────────────────────────
 async def ask_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["twitter"] = update.message.text.strip()
-    print(f"📝 Twitter saved: {context.user_data['twitter']}")
+    logger.info("Onboarding step completed user_id=%s step=twitter", update.effective_user.id)
 
     # ✅ Track user answer + bot question
     track_message(context, update.message.message_id)
@@ -253,7 +261,7 @@ async def ask_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Step 6: Save Telegram → Ask Interests ─────────────────────────
 async def ask_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["telegram"] = update.message.text.strip()
-    print(f"📝 Telegram saved: {context.user_data['telegram']}")
+    logger.info("Onboarding step completed user_id=%s step=telegram", update.effective_user.id)
 
     # ✅ Track user answer + bot question
     track_message(context, update.message.message_id)
@@ -287,8 +295,7 @@ async def ask_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── Step 7: Save Interests → Show Confirmation ────────────────────
 async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["interests"] = update.message.text.strip()
-    print(f"📝 Interests saved: {context.user_data['interests']}")
-    print(f"📋 All details: {context.user_data}")
+    logger.info("Onboarding step completed user_id=%s step=interests", update.effective_user.id)
 
     # ✅ Track user's last answer
     track_message(context, update.message.message_id)
@@ -348,8 +355,7 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram  = context.user_data.get("telegram", "N/A")
     interests = context.user_data.get("interests", "N/A")
 
-    print(f"🚀 Final submit for user {user_id}")
-    print(f"   Details: {name}, {twitter}, {telegram}, {interests}")
+    logger.info("Onboarding final submit user_id=%s", user_id)
 
     if name == "N/A" or name == "":
         await context.bot.send_message(
@@ -361,6 +367,7 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
             parse_mode="Markdown"
         )
+        logger.warning("Onboarding submit rejected for incomplete details user_id=%s", user_id)
         return
 
     # 1. Post profile to Networking topic
@@ -377,9 +384,9 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
             parse_mode="Markdown"
         )
-        print("✅ Profile posted to Networking topic")
+        logger.info("Profile posted to Networking topic user_id=%s", user_id)
     except Exception as e:
-        print(f"❌ Networking post failed: {e}")
+        logger.error("Networking profile post failed user_id=%s: %s", user_id, e)
 
     # 2. Announce in General topic
     try:
@@ -395,9 +402,9 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ),
             parse_mode="Markdown"
         )
-        print("✅ Entry announced in General topic")
+        logger.info("Entry announced in General topic user_id=%s", user_id)
     except Exception as e:
-        print(f"❌ General post failed: {e}")
+        logger.error("General announcement failed user_id=%s: %s", user_id, e)
 
     # 3. Grant full access
     try:
@@ -415,9 +422,9 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "can_pin_messages": False,
             }
         )
-        print(f"✅ Full access granted to user {user_id}")
+        logger.info("Full access granted user_id=%s", user_id)
     except Exception as e:
-        print(f"❌ Access grant failed: {e}")
+        logger.error("Access grant failed user_id=%s: %s", user_id, e)
 
     # 4. Mark complete
     set_state(user_id, "complete")
@@ -425,7 +432,7 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 10: Wipe BEFORE clearing user_data so message IDs are still available
     await wipe_welcome_messages(context, [query.message.message_id])
-    print("✅ Welcome topic wiped clean")
+    logger.info("Welcome topic onboarding messages wiped user_id=%s", user_id)
 
     # 5. Clear data AFTER wipe
     context.user_data.clear()

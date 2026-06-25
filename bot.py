@@ -2,8 +2,17 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     filters, ConversationHandler, CallbackQueryHandler
 )
+import logging
 from telegram import Update
-from config import BOT_TOKEN, SUPERGROUP_ID, THREADS
+from config import (
+    BOT_TOKEN,
+    SUPERGROUP_ID,
+    THREADS,
+    TELEGRAM_CONNECT_TIMEOUT,
+    TELEGRAM_POOL_TIMEOUT,
+    TELEGRAM_READ_TIMEOUT,
+    TELEGRAM_WRITE_TIMEOUT,
+)
 from handlers.welcome import (
     greet_new_member, show_rules, show_form,
     ask_twitter, ask_telegram, ask_interests,
@@ -18,6 +27,10 @@ from handlers.opportunities import post_opportunity
 from handlers.networking import introduce
 from handlers.announcements import announce
 from handlers.general import explor_info, help_menu
+from utils.logging_config import setup_logging
+from utils.monitoring import error_handler, log_update, status_command
+
+logger = logging.getLogger(__name__)
 
 
 # ── Custom thread filter ───────────────────────────────────────────
@@ -35,7 +48,25 @@ def in_thread(thread_key: str):
 
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    setup_logging()
+    logger.info("Starting EXPLOR bot")
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(TELEGRAM_CONNECT_TIMEOUT)
+        .read_timeout(TELEGRAM_READ_TIMEOUT)
+        .write_timeout(TELEGRAM_WRITE_TIMEOUT)
+        .pool_timeout(TELEGRAM_POOL_TIMEOUT)
+        .get_updates_connect_timeout(TELEGRAM_CONNECT_TIMEOUT)
+        .get_updates_read_timeout(TELEGRAM_READ_TIMEOUT)
+        .get_updates_write_timeout(TELEGRAM_WRITE_TIMEOUT)
+        .get_updates_pool_timeout(TELEGRAM_POOL_TIMEOUT)
+        .build()
+    )
+    app.add_error_handler(error_handler)
+
+    # Audit incoming updates before moderation or command handlers run.
+    app.add_handler(MessageHandler(filters.ALL, log_update), group=-1)
 
     # ── 🔒 Access Guard — MUST be first ───────────────────────────────
     app.add_handler(MessageHandler(
@@ -104,6 +135,7 @@ def main():
     # ── General (all topics) ───────────────────────────────────────
     app.add_handler(CommandHandler("help", help_menu), group=1)
     app.add_handler(CommandHandler("explor", explor_info), group=1)
+    app.add_handler(CommandHandler("status", status_command), group=1)
 
     # ── Events topic ───────────────────────────────────────────────
     app.add_handler(CommandHandler("event", post_event,
@@ -134,7 +166,7 @@ def main():
         filters=in_thread("announcement")), group=1)
     
     
-    print("🚀 EXPLOR Bot is running across all topics!")
+    logger.info("EXPLOR bot is running across all topics")
     app.run_polling()
 
 
