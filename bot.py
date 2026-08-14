@@ -14,7 +14,7 @@ from config import (
     TELEGRAM_WRITE_TIMEOUT,
 )
 from handlers.welcome import (
-    greet_new_member, show_rules, show_form,
+    greet_new_member, show_form,
     ask_twitter, ask_telegram, ask_interests,
     confirm_details, confirm_submit,
     ASK_NAME, ASK_TWITTER, ASK_TELEGRAM, ASK_INTERESTS
@@ -124,9 +124,6 @@ def main():
         filters.StatusUpdate.NEW_CHAT_MEMBERS, greet_new_member
     ), group=1)
     # ✅ New
-    app.add_handler(CallbackQueryHandler(
-        show_rules, pattern=r"^show_rules_\d+_\d+$"
-), group=1)
     app.add_handler(CallbackQueryHandler(
         confirm_submit, pattern=r"^confirm_submit_\d+$"
     ), group=1)

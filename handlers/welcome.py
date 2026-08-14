@@ -33,7 +33,7 @@ async def wipe_welcome_messages(context: ContextTypes.DEFAULT_TYPE, extra_ids: l
             logger.warning("Could not delete onboarding message message_id=%s: %s", msg_id, e)
 
 
-# ── Step 1: New member joins ───────────────────────────────────────
+# ── Step 1: New member joins → single "get started" prompt ────────
 async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != SUPERGROUP_ID:
         return
@@ -61,7 +61,7 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         )
 
-        # ✅ Step A: Send the welcome image first
+        # ✅ Step A: Send the welcome image (kept — no text wall attached to it)
         try:
             with open("assets/welcome.jpg", "rb") as photo:
                 sent_photo = await context.bot.send_photo(
@@ -69,104 +69,28 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     message_thread_id=THREADS["welcome"],
                     photo=photo,
                 )
-            # ✅ Track the photo message so it gets wiped after onboarding
             track_message(context, sent_photo.message_id)
         except Exception as e:
             logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
 
-        # ✅ Step B: Send the welcome text + Continue button
+        # ✅ Step B: Single short prompt with a button that goes straight to the form
+        # (welcome text + full rules text removed — button leads directly into show_form)
+        keyboard = [[InlineKeyboardButton(
+            "Get Started ➡️",
+            callback_data=f"show_form_{user_id}"
+        )]]
+
         sent = await context.bot.send_message(
             chat_id=SUPERGROUP_ID,
             message_thread_id=THREADS["welcome"],
-            text=(
-                f"👋 *Welcome to EXPLOR, {member.first_name}!*\n\n"
-                "EXPLOR is a premium growth-focused community connecting "
-                "ambitious individuals through opportunities, "
-                "networking, business, creativity & innovation. 🚀\n\n"
-                "Click *Continue* to get started 👇"
-            ),
+            text=f"👋 *Welcome, {member.first_name}!* Tap below to get started.",
             parse_mode="Markdown",
-        )
-
-        # ✅ Step C: Embed message ID in button so show_rules can track it
-        keyboard = [[InlineKeyboardButton(
-            "Continue ➡️",
-            callback_data=f"show_rules_{user_id}_{sent.message_id}"
-        )]]
-
-        await context.bot.edit_message_reply_markup(
-            chat_id=SUPERGROUP_ID,
-            message_id=sent.message_id,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        track_message(context, sent.message_id)
 
 
-# ── Step 2: Show Rules ─────────────────────────────────────────────
-async def show_rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = update.effective_user.id
-
-    # ✅ FIX 3: Extract welcome_msg_id from callback_data
-    # Format: show_rules_{user_id}_{welcome_msg_id}
-    parts = query.data.split("_")
-    welcome_msg_id = int(parts[-1])
-
-    if str(user_id) not in query.data:
-        await query.answer("⛔ This button is not for you.", show_alert=True)
-        logger.warning("Rejected rules callback for wrong user user_id=%s data=%s", user_id, query.data)
-        return
-
-    # 4: Track the welcome message and the button click message
-    track_message(context, welcome_msg_id)
-    track_message(context, query.message.message_id)
-
-    keyboard = [[InlineKeyboardButton(
-        "Continue ➡️", callback_data=f"show_form_{user_id}"
-    )]]
-
-    # 5: Track the rules message
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "📋 *EXPLOR Community Rules*\n\n"
-            "Please read carefully before proceeding.\n\n"
-            "📜 EXPLOR Community Rules:\n\n"
-            "1. Respect Everyone.\n"
-            "Treat all members with respect.\n"
-            "No hate, harassment, bullying or toxic behavior.\n\n"
-            "2. No Spam.\n"
-            "No spam, scams, fake opportunities or excessive promotions.\n\n"
-            "3. Add Value.\n"
-            "Contribute meaningful conversations, ideas, opportunities & support.\n\n"
-            "4. Stay On Topic.\n"
-            "Use the correct topic/category for discussions.\n\n"
-            "5. No Toxic Arguments.\n"
-            "Healthy discussions are welcome.\n"
-            "Disrespectful fights and unnecessary drama are not.\n\n"
-            "6. No Unauthorized Advertising.\n"
-            "Do not promote businesses, groups, channels or services without admin approval.\n\n"
-            "7. Protect the Community Quality.\n"
-            "We want EXPLOR to remain organized, premium & valuable for everyone.\n\n"
-            "8. No Explicit or Offensive Content.\n"
-            "Keep the community professional and welcoming.\n\n"
-            "9. Respect Privacy.\n"
-            "Do not share personal information or screenshots without permission.\n\n"
-            "10. Follow Admin Instructions.\n"
-            "Moderators and admins help maintain the quality of the community.\n\n"
-            "By staying in EXPLOR, you agree to help maintain a respectful, "
-            "growth-focused & high-value community environment.\n"
-        ),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    track_message(context, sent.message_id)
-    logger.info("Rules shown user_id=%s", user_id)
-
-
-# ── Step 3: Start Form ─────────────────────────────────────────────
+# ── Step 2: Start Form ─────────────────────────────────────────────
 async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -177,16 +101,18 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Rejected form callback for wrong user user_id=%s data=%s", user_id, query.data)
         return
 
+    # ✅ Track the button message itself now that show_rules no longer does this
+    track_message(context, query.message.message_id)
+
     set_state(user_id, "filling_details")
     logger.info("Onboarding form started user_id=%s", user_id)
 
-    # 6: Only clear form fields — preserve onboarding_messages list
+    # Only clear form fields — preserve onboarding_messages list
     context.user_data["name"] = ""
     context.user_data["twitter"] = ""
     context.user_data["telegram"] = ""
     context.user_data["interests"] = ""
 
-    # 7: Track the form intro message
     sent = await context.bot.send_message(
         chat_id=SUPERGROUP_ID,
         message_thread_id=THREADS["welcome"],
@@ -207,15 +133,13 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_NAME
 
 
-# ── Step 4: Save Name → Ask Twitter ───────────────────────────────
+# ── Step 3: Save Name → Ask Twitter ───────────────────────────────
 async def ask_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["name"] = update.message.text.strip()
     logger.info("Onboarding step completed user_id=%s step=name", update.effective_user.id)
 
-    # 8: Track user's answer message
     track_message(context, update.message.message_id)
 
-    # 9: Track bot's question message
     sent = await context.bot.send_message(
         chat_id=SUPERGROUP_ID,
         message_thread_id=THREADS["welcome"],
@@ -233,12 +157,11 @@ async def ask_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_TWITTER
 
 
-# ── Step 5: Save Twitter → Ask Telegram ───────────────────────────
+# ── Step 4: Save Twitter → Ask Telegram ───────────────────────────
 async def ask_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["twitter"] = update.message.text.strip()
     logger.info("Onboarding step completed user_id=%s step=twitter", update.effective_user.id)
 
-    # ✅ Track user answer + bot question
     track_message(context, update.message.message_id)
 
     sent = await context.bot.send_message(
@@ -258,12 +181,11 @@ async def ask_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_TELEGRAM
 
 
-# ── Step 6: Save Telegram → Ask Interests ─────────────────────────
+# ── Step 5: Save Telegram → Ask Interests ─────────────────────────
 async def ask_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["telegram"] = update.message.text.strip()
     logger.info("Onboarding step completed user_id=%s step=telegram", update.effective_user.id)
 
-    # ✅ Track user answer + bot question
     track_message(context, update.message.message_id)
 
     sent = await context.bot.send_message(
@@ -292,12 +214,11 @@ async def ask_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_INTERESTS
 
 
-# ── Step 7: Save Interests → Show Confirmation ────────────────────
+# ── Step 6: Save Interests → Show Confirmation ────────────────────
 async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["interests"] = update.message.text.strip()
     logger.info("Onboarding step completed user_id=%s step=interests", update.effective_user.id)
 
-    # ✅ Track user's last answer
     track_message(context, update.message.message_id)
 
     name      = context.user_data.get("name", "N/A")
@@ -316,7 +237,6 @@ async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )]
     ]
 
-    # ✅ Track the confirmation message
     sent = await context.bot.send_message(
         chat_id=SUPERGROUP_ID,
         message_thread_id=THREADS["welcome"],
@@ -339,7 +259,7 @@ async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ── Step 8: Final Submit ───────────────────────────────────────────
+# ── Step 7: Final Submit ───────────────────────────────────────────
 async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -430,11 +350,10 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(user_id, "complete")
     clear_temp_details(user_id)
 
-    # 10: Wipe BEFORE clearing user_data so message IDs are still available
+    # Wipe BEFORE clearing user_data so message IDs are still available
     await wipe_welcome_messages(context, [query.message.message_id])
     logger.info("Welcome topic onboarding messages wiped user_id=%s", user_id)
 
     # 5. Clear data AFTER wipe
     context.user_data.clear()
-
     
