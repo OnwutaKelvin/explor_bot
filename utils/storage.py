@@ -4,8 +4,8 @@ onboarding_state = {}
 user_details_temp = {}
 
 
-def get_state(user_id: int) -> str:
-    return onboarding_state.get(user_id, "new")
+def get_state(user_id: int) -> str | None:
+    return onboarding_state.get(user_id)
 
 def get_state_counts() -> dict[str, int]:
     counts = {"new": 0, "pending": 0, "filling_details": 0, "complete": 0}

@@ -83,17 +83,13 @@ def main():
     
 
     # ── Onboarding Conversation ────────────────────────────────────
-    onboarding_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(show_form, pattern=r"^show_form_\d+$")
-        ],
-        states={
-            ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_details)],
-        },
-        fallbacks=[],
-        per_chat=False,
-        per_user=True,
-    )
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.NEW_CHAT_MEMBERS, greet_new_member
+    ), group=1)
+    app.add_handler(MessageHandler(
+        filters.Chat(SUPERGROUP_ID) & filters.TEXT & in_thread("welcome"),
+        collect_details
+    ), group=1)
 
     # ── Welcome & Onboarding ───────────────────────────────────────
     app.add_handler(MessageHandler(

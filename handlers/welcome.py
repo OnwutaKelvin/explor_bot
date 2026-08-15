@@ -2,17 +2,11 @@ import re
 import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes, ConversationHandler,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from telegram.ext import ContextTypes
 from config import SUPERGROUP_ID, THREADS
-from utils.storage import set_state, clear_temp_details
+from utils.storage import set_state, get_state, clear_temp_details
 
 logger = logging.getLogger(__name__)
-
-# Conversation states — now just one, since details are entered in a single message
-ASK_DETAILS = 0
 
 # ── Field parsing ───────────────────────────────────────────────────
 FIELD_PATTERNS = {
@@ -67,7 +61,7 @@ async def wipe_welcome_messages(context: ContextTypes.DEFAULT_TYPE, extra_ids: l
             logger.warning("Could not delete onboarding message message_id=%s: %s", msg_id, e)
 
 
-# ── Step 1: New member joins → single photo+caption "get started" prompt ─
+# ── Step 1: New member joins → silently restrict + mark pending ───
 async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != SUPERGROUP_ID:
         return
@@ -77,7 +71,7 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
 
         user_id = member.id
-        set_state(user_id, "pending")
+        set_state(user_id, "filling_details")
         logger.info("New member pending onboarding user_id=%s first_name=%s", user_id, member.first_name)
 
         await context.bot.restrict_chat_member(
@@ -95,79 +89,20 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         )
 
-        keyboard = [[InlineKeyboardButton(
-            "Get Started ➡️",
-            callback_data=f"show_form_{user_id}"
-        )]]
-
-        caption = f"👋 *Welcome, {member.first_name}!* Tap below to get started."
-
-        try:
-            with open("assets/welcome.jpg", "rb") as photo:
-                sent = await context.bot.send_photo(
-                    chat_id=SUPERGROUP_ID,
-                    message_thread_id=THREADS["welcome"],
-                    photo=photo,
-                    caption=caption,
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-            track_message(context, sent.message_id)
-        except Exception as e:
-            # Fallback: if the image fails to load/send, still greet with text
-            logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
-            sent = await context.bot.send_message(
-                chat_id=SUPERGROUP_ID,
-                message_thread_id=THREADS["welcome"],
-                text=caption,
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            track_message(context, sent.message_id)
+        # No welcome message, no button — user goes straight to typing details.
+        # Their own join event message is tracked so it gets wiped too.
+        track_message(context, update.message.message_id)
 
 
-# ── Step 2: Show single-message form ───────────────────────────────
-async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
+# ── Step 2: Catch details message → parse → submit directly ───────
+async def collect_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if str(user_id) not in query.data:
-        await query.answer("⛔ This button is not for you.", show_alert=True)
-        logger.warning("Rejected form callback for wrong user user_id=%s data=%s", user_id, query.data)
+
+    # Only act on users who are still mid-onboarding — ignore everyone else's
+    # normal chatter in the Welcome topic.
+    if get_state(user_id) != "filling_details":
         return
 
-    track_message(context, query.message.message_id)
-
-    set_state(user_id, "filling_details")
-    logger.info("Onboarding form started user_id=%s", user_id)
-
-    context.user_data["name"] = ""
-    context.user_data["twitter"] = ""
-    context.user_data["telegram"] = ""
-    context.user_data["interests"] = ""
-
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "📝 *Member Details Form*\n\n"
-            "Reply with *one message* containing all four details below, "
-            "each on its own line, in this exact format:\n\n"
-            f"`{FORM_TEMPLATE}`\n\n"
-            "Your details will be shared in the Networking topic so "
-            "members can connect with you.\n\n"
-            "_Type_ `none` _for Twitter or Telegram if you don't have one._"
-        ),
-        parse_mode="Markdown"
-    )
-    track_message(context, sent.message_id)
-
-    return ASK_DETAILS
-
-
-# ── Step 3: Parse the single details message → Show Confirmation ──
-async def collect_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_message(context, update.message.message_id)
 
     parsed = parse_details(update.message.text or "")
@@ -188,80 +123,16 @@ async def collect_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         track_message(context, sent.message_id)
         logger.warning(
             "Onboarding details incomplete user_id=%s missing=%s",
-            update.effective_user.id, missing
+            user_id, missing
         )
-        return ASK_DETAILS
-
-    context.user_data["name"] = parsed["name"]
-    context.user_data["twitter"] = parsed["twitter"]
-    context.user_data["telegram"] = parsed["telegram"]
-    context.user_data["interests"] = parsed["interests"]
-
-    logger.info("Onboarding details parsed user_id=%s", update.effective_user.id)
-
-    user_id = update.effective_user.id
-
-    keyboard = [
-        [InlineKeyboardButton(
-            "✅ Submit", callback_data=f"confirm_submit_{user_id}"
-        )],
-        [InlineKeyboardButton(
-            "✏️ Start Over", callback_data=f"show_form_{user_id}"
-        )]
-    ]
-
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "――――――――――――――――――\n"
-            "📋 *Please confirm your details:*\n\n"
-            f"*Name:* {context.user_data['name']}\n"
-            f"*Twitter/X:* {context.user_data['twitter']}\n"
-            f"*Telegram:* {context.user_data['telegram']}\n"
-            f"*Interests:* {context.user_data['interests']}\n\n"
-            "――――――――――――――――――\n"
-            "Click *Submit* to complete your registration\n"
-            "or *Start Over* to correct your details 👇"
-        ),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    track_message(context, sent.message_id)
-
-    return ConversationHandler.END
-
-
-# ── Step 4: Final Submit ───────────────────────────────────────────
-async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = update.effective_user.id
-
-    if str(user_id) not in query.data:
-        await query.answer("⛔ This button is not for you.", show_alert=True)
         return
 
-    name      = context.user_data.get("name", "N/A")
-    twitter   = context.user_data.get("twitter", "N/A")
-    telegram  = context.user_data.get("telegram", "N/A")
-    interests = context.user_data.get("interests", "N/A")
+    name      = parsed["name"]
+    twitter   = parsed["twitter"]
+    telegram  = parsed["telegram"]
+    interests = parsed["interests"]
 
-    logger.info("Onboarding final submit user_id=%s", user_id)
-
-    if name == "N/A" or name == "":
-        await context.bot.send_message(
-            chat_id=SUPERGROUP_ID,
-            message_thread_id=THREADS["welcome"],
-            text=(
-                "⚠️ Your details seem incomplete.\n"
-                "Please click *Start Over* and fill in the form again."
-            ),
-            parse_mode="Markdown"
-        )
-        logger.warning("Onboarding submit rejected for incomplete details user_id=%s", user_id)
-        return
+    logger.info("Onboarding details parsed user_id=%s", user_id)
 
     # 1. Post profile to Networking topic
     try:
@@ -323,8 +194,8 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_state(user_id, "complete")
     clear_temp_details(user_id)
 
-    # Wipe BEFORE clearing user_data so message IDs are still available
-    await wipe_welcome_messages(context, [query.message.message_id])
+    # Wipe all tracked onboarding messages (join event, warnings, details message)
+    await wipe_welcome_messages(context, [])
     logger.info("Welcome topic onboarding messages wiped user_id=%s", user_id)
 
     # 5. Clear data AFTER wipe
