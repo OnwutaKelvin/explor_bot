@@ -67,7 +67,7 @@ async def wipe_welcome_messages(context: ContextTypes.DEFAULT_TYPE, extra_ids: l
             logger.warning("Could not delete onboarding message message_id=%s: %s", msg_id, e)
 
 
-# ── Step 1: New member joins → single "get started" prompt ────────
+# ── Step 1: New member joins → single photo+caption "get started" prompt ─
 async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != SUPERGROUP_ID:
         return
@@ -95,30 +95,35 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         )
 
-        try:
-            with open("assets/welcome.jpg", "rb") as photo:
-                sent_photo = await context.bot.send_photo(
-                    chat_id=SUPERGROUP_ID,
-                    message_thread_id=THREADS["welcome"],
-                    photo=photo,
-                )
-            track_message(context, sent_photo.message_id)
-        except Exception as e:
-            logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
-
         keyboard = [[InlineKeyboardButton(
             "Get Started ➡️",
             callback_data=f"show_form_{user_id}"
         )]]
 
-        sent = await context.bot.send_message(
-            chat_id=SUPERGROUP_ID,
-            message_thread_id=THREADS["welcome"],
-            text=f"👋 *Welcome, {member.first_name}!* Tap below to get started.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        track_message(context, sent.message_id)
+        caption = f"👋 *Welcome, {member.first_name}!* Tap below to get started."
+
+        try:
+            with open("assets/welcome.jpg", "rb") as photo:
+                sent = await context.bot.send_photo(
+                    chat_id=SUPERGROUP_ID,
+                    message_thread_id=THREADS["welcome"],
+                    photo=photo,
+                    caption=caption,
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            track_message(context, sent.message_id)
+        except Exception as e:
+            # Fallback: if the image fails to load/send, still greet with text
+            logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
+            sent = await context.bot.send_message(
+                chat_id=SUPERGROUP_ID,
+                message_thread_id=THREADS["welcome"],
+                text=caption,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            track_message(context, sent.message_id)
 
 
 # ── Step 2: Show single-message form ───────────────────────────────
