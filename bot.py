@@ -1,6 +1,6 @@
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ConversationHandler, CallbackQueryHandler
+    filters
 )
 import logging
 from telegram import Update
@@ -13,11 +13,7 @@ from config import (
     TELEGRAM_READ_TIMEOUT,
     TELEGRAM_WRITE_TIMEOUT,
 )
-from handlers.welcome import (
-    greet_new_member, show_form,
-    collect_details, confirm_submit,
-    ASK_DETAILS
-)
+from handlers.welcome import greet_new_member, collect_details
 from handlers.guard import guard_access, guard_networking
 from handlers.events import post_event, list_rules
 from handlers.social_media import growth_tip, share_profile
@@ -80,9 +76,9 @@ def main():
         ),
         guard_access
     ), group=0)
-    
 
-    # ── Onboarding Conversation ────────────────────────────────────
+
+    # ── Welcome & Onboarding ───────────────────────────────────────
     app.add_handler(MessageHandler(
         filters.StatusUpdate.NEW_CHAT_MEMBERS, greet_new_member
     ), group=1)
@@ -90,16 +86,6 @@ def main():
         filters.Chat(SUPERGROUP_ID) & filters.TEXT & in_thread("welcome"),
         collect_details
     ), group=1)
-
-    # ── Welcome & Onboarding ───────────────────────────────────────
-    app.add_handler(MessageHandler(
-        filters.StatusUpdate.NEW_CHAT_MEMBERS, greet_new_member
-    ), group=1)
-    # ✅ New
-    app.add_handler(CallbackQueryHandler(
-        confirm_submit, pattern=r"^confirm_submit_\d+$"
-    ), group=1)
-    app.add_handler(onboarding_conv, group=1)
 
     # ── General (all topics) ───────────────────────────────────────
     app.add_handler(CommandHandler("help", help_menu), group=1)
@@ -133,8 +119,8 @@ def main():
     # ── Announcement topic ─────────────────────────────────────────
     app.add_handler(CommandHandler("announce", announce,
         filters=in_thread("announcement")), group=1)
-    
-    
+
+
     logger.info("EXPLOR bot is running across all topics")
     app.run_polling()
 
