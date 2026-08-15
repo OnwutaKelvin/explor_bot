@@ -15,9 +15,8 @@ from config import (
 )
 from handlers.welcome import (
     greet_new_member, show_form,
-    ask_twitter, ask_telegram, ask_interests,
-    confirm_details, confirm_submit,
-    ASK_NAME, ASK_TWITTER, ASK_TELEGRAM, ASK_INTERESTS
+    collect_details, confirm_submit,
+    ASK_DETAILS
 )
 from handlers.guard import guard_access, guard_networking
 from handlers.events import post_event, list_rules
@@ -89,30 +88,7 @@ def main():
             CallbackQueryHandler(show_form, pattern=r"^show_form_\d+$")
         ],
         states={
-            ASK_NAME: [
-                MessageHandler(
-                    in_thread("welcome") & filters.TEXT & ~filters.COMMAND,
-                    ask_twitter
-                )
-            ],
-            ASK_TWITTER: [
-                MessageHandler(
-                    in_thread("welcome") & filters.TEXT & ~filters.COMMAND,
-                    ask_telegram
-                )
-            ],
-            ASK_TELEGRAM: [
-                MessageHandler(
-                    in_thread("welcome") & filters.TEXT & ~filters.COMMAND,
-                    ask_interests
-                )
-            ],
-            ASK_INTERESTS: [
-                MessageHandler(
-                    in_thread("welcome") & filters.TEXT & ~filters.COMMAND,
-                    confirm_details
-                )
-            ],
+            ASK_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, collect_details)],
         },
         fallbacks=[],
         per_chat=False,

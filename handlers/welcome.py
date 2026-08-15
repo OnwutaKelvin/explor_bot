@@ -1,16 +1,50 @@
+import re
+import logging
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler,
     CallbackQueryHandler, MessageHandler, filters
 )
-import logging
 from config import SUPERGROUP_ID, THREADS
 from utils.storage import set_state, clear_temp_details
 
 logger = logging.getLogger(__name__)
 
-# Conversation states
-ASK_NAME, ASK_TWITTER, ASK_TELEGRAM, ASK_INTERESTS = range(4)
+# Conversation states — now just one, since details are entered in a single message
+ASK_DETAILS = 0
+
+# ── Field parsing ───────────────────────────────────────────────────
+FIELD_PATTERNS = {
+    "name":      r"name\s*:\s*(.+)",
+    "twitter":   r"twitter(?:\s*/\s*x)?\s*:\s*(.+)",
+    "telegram":  r"telegram\s*:\s*(.+)",
+    "interests": r"interests?\s*:\s*(.+)",
+}
+
+FORM_TEMPLATE = (
+    "Name: John Doe\n"
+    "Twitter: @johndoe\n"
+    "Telegram: @johndoe\n"
+    "Interests: Technology, Finance & Investing"
+)
+
+
+def parse_details(text: str) -> dict:
+    """Parse a single free-text message into the four fields.
+    Returns a dict with any fields found; missing fields are omitted."""
+    fields = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        for key, pattern in FIELD_PATTERNS.items():
+            match = re.match(pattern, line, re.IGNORECASE)
+            if match:
+                value = match.group(1).strip()
+                if value:
+                    fields[key] = value
+    return fields
 
 
 # ── Helper: Track message IDs ──────────────────────────────────────
@@ -61,7 +95,6 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         )
 
-        # ✅ Step A: Send the welcome image (kept — no text wall attached to it)
         try:
             with open("assets/welcome.jpg", "rb") as photo:
                 sent_photo = await context.bot.send_photo(
@@ -73,8 +106,6 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning("Could not send welcome image user_id=%s: %s", user_id, e)
 
-        # ✅ Step B: Single short prompt with a button that goes straight to the form
-        # (welcome text + full rules text removed — button leads directly into show_form)
         keyboard = [[InlineKeyboardButton(
             "Get Started ➡️",
             callback_data=f"show_form_{user_id}"
@@ -90,7 +121,7 @@ async def greet_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         track_message(context, sent.message_id)
 
 
-# ── Step 2: Start Form ─────────────────────────────────────────────
+# ── Step 2: Show single-message form ───────────────────────────────
 async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -101,13 +132,11 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Rejected form callback for wrong user user_id=%s data=%s", user_id, query.data)
         return
 
-    # ✅ Track the button message itself now that show_rules no longer does this
     track_message(context, query.message.message_id)
 
     set_state(user_id, "filling_details")
     logger.info("Onboarding form started user_id=%s", user_id)
 
-    # Only clear form fields — preserve onboarding_messages list
     context.user_data["name"] = ""
     context.user_data["twitter"] = ""
     context.user_data["telegram"] = ""
@@ -118,113 +147,52 @@ async def show_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_thread_id=THREADS["welcome"],
         text=(
             "📝 *Member Details Form*\n\n"
-            "Let's get to know you! Your details will be shared "
-            "in the Networking topic so members can connect with you.\n\n"
-            "Type your answer and send it as a message here "
-            "in the *Welcome* topic.\n\n"
-            "――――――――――――――――――\n"
-            "*Question 1 of 4*\n\n"
-            "👤 What is your *name?*"
+            "Reply with *one message* containing all four details below, "
+            "each on its own line, in this exact format:\n\n"
+            f"`{FORM_TEMPLATE}`\n\n"
+            "Your details will be shared in the Networking topic so "
+            "members can connect with you.\n\n"
+            "_Type_ `none` _for Twitter or Telegram if you don't have one._"
         ),
         parse_mode="Markdown"
     )
     track_message(context, sent.message_id)
 
-    return ASK_NAME
+    return ASK_DETAILS
 
 
-# ── Step 3: Save Name → Ask Twitter ───────────────────────────────
-async def ask_twitter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name"] = update.message.text.strip()
-    logger.info("Onboarding step completed user_id=%s step=name", update.effective_user.id)
-
+# ── Step 3: Parse the single details message → Show Confirmation ──
+async def collect_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     track_message(context, update.message.message_id)
 
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "――――――――――――――――――\n"
-            "*Question 2 of 4*\n\n"
-            "🐦 What is your *Twitter/X username?*\n"
-            "_(e.g. @elonmusk — include the @ symbol)_\n\n"
-            "_Type_ `none` _if you don't have one._"
-        ),
-        parse_mode="Markdown"
-    )
-    track_message(context, sent.message_id)
+    parsed = parse_details(update.message.text or "")
+    required = ["name", "twitter", "telegram", "interests"]
+    missing = [f for f in required if f not in parsed or not parsed[f]]
 
-    return ASK_TWITTER
+    if missing:
+        sent = await context.bot.send_message(
+            chat_id=SUPERGROUP_ID,
+            message_thread_id=THREADS["welcome"],
+            text=(
+                "⚠️ I couldn't find: *" + ", ".join(missing) + "*.\n\n"
+                "Please resend all four details in this exact format:\n\n"
+                f"`{FORM_TEMPLATE}`"
+            ),
+            parse_mode="Markdown"
+        )
+        track_message(context, sent.message_id)
+        logger.warning(
+            "Onboarding details incomplete user_id=%s missing=%s",
+            update.effective_user.id, missing
+        )
+        return ASK_DETAILS
 
+    context.user_data["name"] = parsed["name"]
+    context.user_data["twitter"] = parsed["twitter"]
+    context.user_data["telegram"] = parsed["telegram"]
+    context.user_data["interests"] = parsed["interests"]
 
-# ── Step 4: Save Twitter → Ask Telegram ───────────────────────────
-async def ask_telegram(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["twitter"] = update.message.text.strip()
-    logger.info("Onboarding step completed user_id=%s step=twitter", update.effective_user.id)
-
-    track_message(context, update.message.message_id)
-
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "――――――――――――――――――\n"
-            "*Question 3 of 4*\n\n"
-            "✈️ What is your *Telegram username?*\n"
-            "_(e.g. @username — this is how members will reach you)_\n\n"
-            "_Type_ `none` _if you haven't set one yet._"
-        ),
-        parse_mode="Markdown"
-    )
-    track_message(context, sent.message_id)
-
-    return ASK_TELEGRAM
-
-
-# ── Step 5: Save Telegram → Ask Interests ─────────────────────────
-async def ask_interests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["telegram"] = update.message.text.strip()
-    logger.info("Onboarding step completed user_id=%s step=telegram", update.effective_user.id)
-
-    track_message(context, update.message.message_id)
-
-    sent = await context.bot.send_message(
-        chat_id=SUPERGROUP_ID,
-        message_thread_id=THREADS["welcome"],
-        text=(
-            "――――――――――――――――――\n"
-            "*Question 4 of 4*\n\n"
-            "🎯 What are your *interests?*\n\n"
-            "Choose from the list below or type your own — "
-            "separate multiple with commas:\n\n"
-            "• Entrepreneurship\n"
-            "• Technology\n"
-            "• Social Media & Content\n"
-            "• Finance & Investing\n"
-            "• Creative Arts\n"
-            "• Health & Wellness\n"
-            "• Real Estate\n"
-            "• Marketing & Branding\n\n"
-            "_(e.g. Technology, Finance & Investing, Marketing)_"
-        ),
-        parse_mode="Markdown"
-    )
-    track_message(context, sent.message_id)
-
-    return ASK_INTERESTS
-
-
-# ── Step 6: Save Interests → Show Confirmation ────────────────────
-async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["interests"] = update.message.text.strip()
-    logger.info("Onboarding step completed user_id=%s step=interests", update.effective_user.id)
-
-    track_message(context, update.message.message_id)
-
-    name      = context.user_data.get("name", "N/A")
-    twitter   = context.user_data.get("twitter", "N/A")
-    telegram  = context.user_data.get("telegram", "N/A")
-    interests = context.user_data.get("interests", "N/A")
+    logger.info("Onboarding details parsed user_id=%s", update.effective_user.id)
 
     user_id = update.effective_user.id
 
@@ -243,10 +211,10 @@ async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=(
             "――――――――――――――――――\n"
             "📋 *Please confirm your details:*\n\n"
-            f"*Name:* {name}\n"
-            f"*Twitter/X:* {twitter}\n"
-            f"*Telegram:* {telegram}\n"
-            f"*Interests:* {interests}\n\n"
+            f"*Name:* {context.user_data['name']}\n"
+            f"*Twitter/X:* {context.user_data['twitter']}\n"
+            f"*Telegram:* {context.user_data['telegram']}\n"
+            f"*Interests:* {context.user_data['interests']}\n\n"
             "――――――――――――――――――\n"
             "Click *Submit* to complete your registration\n"
             "or *Start Over* to correct your details 👇"
@@ -259,7 +227,7 @@ async def confirm_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-# ── Step 7: Final Submit ───────────────────────────────────────────
+# ── Step 4: Final Submit ───────────────────────────────────────────
 async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -356,4 +324,3 @@ async def confirm_submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 5. Clear data AFTER wipe
     context.user_data.clear()
-    
